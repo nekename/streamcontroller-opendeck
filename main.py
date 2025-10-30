@@ -2,7 +2,7 @@ from src.backend.PluginManager.ActionBase import ActionBase
 from src.backend.PluginManager.PluginBase import PluginBase
 from src.backend.PluginManager.ActionHolder import ActionHolder
 from src.backend.PluginManager.ActionInputSupport import ActionInputSupport
-from src.backend.DeckManagement.InputIdentifier import Input
+from src.backend.DeckManagement.InputIdentifier import Input, InputEvent
 from src.Signals import Signals
 
 import globals as gl
@@ -156,12 +156,26 @@ class PluginTemplate(PluginBase):
     def __init__(self):
         super().__init__()
 
+        # Support both key (button) and dial actions
         self.action_holder = ActionHolder(
             plugin_base=self,
             action_base=OpenDeckButton,
             action_id_suffix="OpenDeckButton",
             action_name="OpenDeck Button",
-            action_support={Input.Key: ActionInputSupport.SUPPORTED},
+            action_support={
+                Input.Key: ActionInputSupport.SUPPORTED,
+            },
+        )
+        self.add_action_holder(self.action_holder)
+
+        self.action_holder = ActionHolder(
+            plugin_base=self,
+            action_base=OpenDeckButton,
+            action_id_suffix="OpenDeckDial",
+            action_name="OpenDeck Dial",
+            action_support={
+                Input.Dial: ActionInputSupport.SUPPORTED,
+            },
         )
         self.add_action_holder(self.action_holder)
 
@@ -184,11 +198,19 @@ class OpenDeckButton(ActionBase):
         self.context_store = None
 
     def context(self) -> (str, str, int):
+        # Determine if this is a dial or key input
+
+        controller_type = (
+            "Encoder" if self.get_input().identifier.input_type == "dials" else "Keypad"
+        )
+
         new = (
             "sd-" + self.deck_controller.deck.get_serial_number(),
             self.page.get_name(),
-            "Keypad",
-            self.get_input().index,
+            controller_type,
+            self.get_input().index
+            if controller_type == "Keypad"
+            else self.get_input().identifier.index,
         )
         if new != self.context_store:
             if self.context_store is not None:
@@ -198,6 +220,21 @@ class OpenDeckButton(ActionBase):
             log.info(f"Created action {new}")
             self.context_store = new
         return new
+
+    def event_callback(self, event: InputEvent, data: dict = None):
+        ## backward compatibility
+        if event == Input.Key.Events.DOWN:
+            self.on_key_down()
+        elif event == Input.Key.Events.UP:
+            self.on_key_up()
+        elif event == Input.Dial.Events.DOWN:
+            self.on_encoder_down()
+        elif event == Input.Dial.Events.UP:
+            self.on_encoder_up()
+        elif event == Input.Dial.Events.TURN_CW:
+            self.on_encoder_turn_cw()
+        elif event == Input.Dial.Events.TURN_CCW:
+            self.on_encoder_turn_ccw()
 
     def on_ready(self) -> None:
         self.set_media(media_path=greyscale_image)
@@ -227,3 +264,54 @@ class OpenDeckButton(ActionBase):
 
     def on_key_up(self) -> None:
         self.on_key("keyUp")
+
+    # Add dial-specific methods
+    def on_encoder_change(self, direction) -> None:
+        """Handle dial rotation events"""
+        context = self.context()
+        ticks = 1 if direction > 0 else -1
+        send_to_opendeck(
+            json.dumps(
+                {
+                    "event": "encoderChange",
+                    "payload": {
+                        "device": context[0],
+                        "position": context[3],
+                        "ticks": ticks,
+                    },
+                }
+            )
+        )
+
+    def on_encoder_down(self) -> None:
+        """Handle dial press down event"""
+        context = self.context()
+        send_to_opendeck(
+            json.dumps(
+                {
+                    "event": "encoderDown",
+                    "payload": {"device": context[0], "position": context[3]},
+                }
+            )
+        )
+
+    def on_encoder_up(self) -> None:
+        """Handle dial press up event"""
+        context = self.context()
+        send_to_opendeck(
+            json.dumps(
+                {
+                    "event": "encoderUp",
+                    "payload": {"device": context[0], "position": context[3]},
+                }
+            )
+        )
+
+    # Specialized method for dial rotation that can be triggered by the framework
+    def on_encoder_turn_cw(self) -> None:
+        """Handle clockwise dial rotation"""
+        self.on_encoder_change(1)
+
+    def on_encoder_turn_ccw(self) -> None:
+        """Handle counter-clockwise dial rotation"""
+        self.on_encoder_change(-1)

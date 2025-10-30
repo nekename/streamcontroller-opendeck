@@ -212,7 +212,6 @@ class OpenDeckButton(ActionBase):
         return new
 
     def event_callback(self, event: InputEvent, data: dict = None):
-        ## backward compatibility
         if event == Input.Key.Events.DOWN:
             self.on_key_down()
         elif event == Input.Key.Events.UP:

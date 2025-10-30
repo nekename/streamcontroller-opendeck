@@ -164,16 +164,6 @@ class PluginTemplate(PluginBase):
             action_name="OpenDeck Button",
             action_support={
                 Input.Key: ActionInputSupport.SUPPORTED,
-            },
-        )
-        self.add_action_holder(self.action_holder)
-
-        self.action_holder = ActionHolder(
-            plugin_base=self,
-            action_base=OpenDeckButton,
-            action_id_suffix="OpenDeckDial",
-            action_name="OpenDeck Dial",
-            action_support={
                 Input.Dial: ActionInputSupport.SUPPORTED,
             },
         )

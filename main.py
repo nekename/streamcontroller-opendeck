@@ -256,10 +256,9 @@ class OpenDeckButton(ActionBase):
         self.on_key("keyUp")
 
     # Add dial-specific methods
-    def on_encoder_change(self, direction) -> None:
+    def on_encoder_change(self, ticks) -> None:
         """Handle dial rotation events"""
         context = self.context()
-        ticks = 1 if direction > 0 else -1
         send_to_opendeck(
             json.dumps(
                 {

@@ -2,7 +2,7 @@ from src.backend.PluginManager.ActionBase import ActionBase
 from src.backend.PluginManager.PluginBase import PluginBase
 from src.backend.PluginManager.ActionHolder import ActionHolder
 from src.backend.PluginManager.ActionInputSupport import ActionInputSupport
-from src.backend.DeckManagement.InputIdentifier import Input
+from src.backend.DeckManagement.InputIdentifier import Input, InputEvent
 from src.Signals import Signals
 
 import globals as gl
@@ -161,7 +161,10 @@ class PluginTemplate(PluginBase):
             action_base=OpenDeckButton,
             action_id_suffix="OpenDeckButton",
             action_name="OpenDeck Button",
-            action_support={Input.Key: ActionInputSupport.SUPPORTED},
+            action_support={
+                Input.Key: ActionInputSupport.SUPPORTED,
+                Input.Dial: ActionInputSupport.SUPPORTED,
+            },
         )
         self.add_action_holder(self.action_holder)
 
@@ -184,11 +187,16 @@ class OpenDeckButton(ActionBase):
         self.context_store = None
 
     def context(self) -> (str, str, int):
+        controller = (
+            "Encoder" if self.get_input().identifier.input_type == "dials" else "Keypad"
+        )
         new = (
             "sd-" + self.deck_controller.deck.get_serial_number(),
             self.page.get_name(),
-            "Keypad",
-            self.get_input().index,
+            controller,
+            self.get_input().index
+            if controller == "Keypad"
+            else self.get_input().identifier.index,
         )
         if new != self.context_store:
             if self.context_store is not None:
@@ -198,6 +206,20 @@ class OpenDeckButton(ActionBase):
             log.info(f"Created action {new}")
             self.context_store = new
         return new
+
+    def event_callback(self, event: InputEvent, data: dict = None):
+        if event == Input.Key.Events.DOWN:
+            self.on_key_down()
+        elif event == Input.Key.Events.UP:
+            self.on_key_up()
+        elif event == Input.Dial.Events.DOWN:
+            self.on_encoder_down()
+        elif event == Input.Dial.Events.UP:
+            self.on_encoder_up()
+        elif event == Input.Dial.Events.TURN_CW:
+            self.on_encoder_change(1)
+        elif event == Input.Dial.Events.TURN_CCW:
+            self.on_encoder_change(-1)
 
     def on_ready(self) -> None:
         self.set_media(media_path=greyscale_image)
@@ -211,7 +233,7 @@ class OpenDeckButton(ActionBase):
             )
         )
 
-    def on_key(self, direction) -> None:
+    def on_press(self, direction) -> None:
         context = self.context()
         send_to_opendeck(
             json.dumps(
@@ -223,7 +245,28 @@ class OpenDeckButton(ActionBase):
         )
 
     def on_key_down(self) -> None:
-        self.on_key("keyDown")
+        self.on_press("keyDown")
 
     def on_key_up(self) -> None:
-        self.on_key("keyUp")
+        self.on_press("keyUp")
+
+    def on_encoder_change(self, ticks) -> None:
+        context = self.context()
+        send_to_opendeck(
+            json.dumps(
+                {
+                    "event": "encoderChange",
+                    "payload": {
+                        "device": context[0],
+                        "position": context[3],
+                        "ticks": ticks,
+                    },
+                }
+            )
+        )
+
+    def on_encoder_down(self) -> None:
+        self.on_press("encoderDown")
+
+    def on_encoder_up(self) -> None:
+        self.on_press("encoderUp")

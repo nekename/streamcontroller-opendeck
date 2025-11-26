@@ -169,10 +169,10 @@ class PluginTemplate(PluginBase):
         self.add_action_holder(self.action_holder)
 
         self.register(
-            plugin_version="1.0.0",
+            plugin_version="1.1.0",
             plugin_name="OpenDeck",
             github_repo="https://github.com/nekename/opendeck-streamcontroller",
-            app_version="1.0.0-alpha",
+            app_version="1.5.0-beta.11",
         )
 
         global greyscale_image

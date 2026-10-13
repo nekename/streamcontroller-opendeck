@@ -17,7 +17,6 @@ from io import BytesIO
 
 from time import sleep
 from os import path
-from socket import socket, AF_INET, SOCK_DGRAM
 from loguru import logger as log
 
 registered_devices = []
@@ -83,19 +82,8 @@ gl.signal_manager.connect_signal(signal=Signals.ChangePage, callback=change_page
 def connect_to_opendeck() -> None:
     while True:
         try:
-            # Flatpak `localhost` only resolves internally so we try to use the host local IP
-            s = socket(AF_INET, SOCK_DGRAM)
-            try:
-                s.connect(("8.8.8.8", 80))
-                ip = s.getsockname()[0]
-            except Exception as e:
-                log.error(f"Could not discover local IP: {e}")
-                ip = "127.0.0.1"
-            finally:
-                s.close()
-            log.info(f"Connecting to OpenDeck using IP {ip}")
-
-            ws.connect(f"ws://{ip}:57116")
+            log.info("Connecting to OpenDeck using loopback address")
+            ws.connect("ws://127.0.0.1:57116")
             send_to_opendeck(
                 json.dumps(
                     {

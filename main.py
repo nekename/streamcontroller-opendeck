@@ -81,6 +81,12 @@ gl.signal_manager.connect_signal(signal=Signals.ChangePage, callback=change_page
 
 
 def connect_to_opendeck() -> None:
+    global ws, registered_devices
+    # If we connect before StreamController has created its deck manager, the
+    # first registration fails part-way through and OpenDeck keeps it alive,
+    # so every later reconnect is rejected as a duplicate registration.
+    while getattr(gl, "deck_manager", None) is None:
+        sleep(0.5)
     while True:
         try:
             # Flatpak `localhost` only resolves internally so we try to use the host local IP
@@ -105,6 +111,9 @@ def connect_to_opendeck() -> None:
                 )
             )
             log.success("Connected to OpenDeck")
+            # Devices "registered" while disconnected (e.g. on a page change during
+            # startup) never reached OpenDeck, so register them again now
+            registered_devices = []
             for controller in gl.deck_manager.deck_controller:
                 change_page(controller)
 
@@ -144,11 +153,18 @@ def connect_to_opendeck() -> None:
         except Exception as e:
             log.warning(e)
 
+        # Close the old connection so OpenDeck drops our registration before we
+        # retry; otherwise the retry is rejected as a duplicate registration
+        try:
+            ws.close()
+        except Exception:
+            pass
+        ws = WebSocket()
+
         for action in actions.values():
             action.set_media(media_path=greyscale_image)
 
         sleep(5)
-        global registered_devices
         registered_devices = []
 
 

@@ -46,6 +46,16 @@ def change_page(controller, *args):
         name = deck.deck_type() + " (StreamController)"
         (rows, columns) = deck.key_layout()
         encoders = deck.dial_count()
+        # Stream Deck Neo extras: OpenDeck puts touch points on the Keypad
+        # controller after the regular keys, and the info bar on "Infobar"
+        try:
+            touchpoints = deck.touch_key_count()
+        except Exception:
+            touchpoints = 0
+        try:
+            has_screen = deck.screen_image_format().get("size", (0, 0)) != (0, 0)
+        except Exception:
+            has_screen = False
 
         send_to_opendeck(
             json.dumps(
@@ -57,6 +67,8 @@ def change_page(controller, *args):
                         "rows": rows,
                         "columns": columns,
                         "encoders": encoders,
+                        "touchpoints": touchpoints,
+                        "infobars": 1 if has_screen else 0,
                         "type": 0,
                     },
                 }
@@ -81,6 +93,12 @@ gl.signal_manager.connect_signal(signal=Signals.ChangePage, callback=change_page
 
 
 def connect_to_opendeck() -> None:
+    global ws, registered_devices
+    # If we connect before StreamController has created its deck manager, the
+    # first registration fails part-way through and OpenDeck keeps it alive,
+    # so every later reconnect is rejected as a duplicate registration.
+    while getattr(gl, "deck_manager", None) is None:
+        sleep(0.5)
     while True:
         try:
             # Flatpak `localhost` only resolves internally so we try to use the host local IP
@@ -105,6 +123,9 @@ def connect_to_opendeck() -> None:
                 )
             )
             log.success("Connected to OpenDeck")
+            # Devices "registered" while disconnected (e.g. on a page change during
+            # startup) never reached OpenDeck, so register them again now
+            registered_devices = []
             for controller in gl.deck_manager.deck_controller:
                 change_page(controller)
 
@@ -133,22 +154,29 @@ def connect_to_opendeck() -> None:
                         if image is not None:
                             encoded = image.split(",", 1)[1]
                             data = b64decode(encoded)
-                            action.set_media(image=Image.open(BytesIO(data)))
+                            action.show_image(Image.open(BytesIO(data)))
                         else:
-                            action.set_media(media_path=greyscale_image)
+                            action.show_image(None)
                     else:
                         for context, action in actions.items():
                             if context[0] == data["device"]:
-                                action.set_media(media_path=greyscale_image)
+                                action.show_image(None)
 
         except Exception as e:
             log.warning(e)
 
+        # Close the old connection so OpenDeck drops our registration before we
+        # retry; otherwise the retry is rejected as a duplicate registration
+        try:
+            ws.close()
+        except Exception:
+            pass
+        ws = WebSocket()
+
         for action in actions.values():
-            action.set_media(media_path=greyscale_image)
+            action.show_image(None)
 
         sleep(5)
-        global registered_devices
         registered_devices = []
 
 
@@ -156,15 +184,21 @@ class PluginTemplate(PluginBase):
     def __init__(self):
         super().__init__()
 
+        action_support = {
+            Input.Key: ActionInputSupport.SUPPORTED,
+            Input.Dial: ActionInputSupport.SUPPORTED,
+        }
+        # Stream Deck Neo touch points and info bar (only in newer StreamController versions)
+        for input_class in ("TouchKey", "Screen"):
+            if hasattr(Input, input_class):
+                action_support[getattr(Input, input_class)] = ActionInputSupport.SUPPORTED
+
         self.action_holder = ActionHolder(
             plugin_base=self,
             action_base=OpenDeckButton,
             action_id_suffix="OpenDeckButton",
             action_name="OpenDeck Button",
-            action_support={
-                Input.Key: ActionInputSupport.SUPPORTED,
-                Input.Dial: ActionInputSupport.SUPPORTED,
-            },
+            action_support=action_support,
         )
         self.add_action_holder(self.action_holder)
 
@@ -186,17 +220,27 @@ class OpenDeckButton(ActionBase):
         super().__init__(*args, **kwargs)
         self.context_store = None
 
-    def context(self) -> (str, str, int):
-        controller = (
-            "Encoder" if self.get_input().identifier.input_type == "dials" else "Keypad"
-        )
+    def input_type(self) -> str:
+        return self.get_input().identifier.input_type
+
+    def context(self) -> (str, str, str, int):
+        input_type = self.input_type()
+        identifier = self.get_input().identifier
+        if input_type == "dials":
+            controller, position = "Encoder", identifier.index
+        elif input_type == "touch_keys":
+            # OpenDeck numbers touch points after the regular keys
+            controller = "Keypad"
+            position = self.deck_controller.deck.key_count() + identifier.index
+        elif input_type == "screens":
+            controller, position = "Infobar", 0
+        else:
+            controller, position = "Keypad", self.get_input().index
         new = (
             "sd-" + self.deck_controller.deck.get_serial_number(),
             self.page.get_name(),
             controller,
-            self.get_input().index
-            if controller == "Keypad"
-            else self.get_input().identifier.index,
+            position,
         )
         if new != self.context_store:
             if self.context_store is not None:
@@ -221,8 +265,24 @@ class OpenDeckButton(ActionBase):
         elif event == Input.Dial.Events.TURN_CCW:
             self.on_encoder_change(-1)
 
+    def show_image(self, image) -> None:
+        """Show an image from OpenDeck, or the placeholder if image is None."""
+        if self.input_type() == "touch_keys":
+            # Touch points can only show a colour: use the image's average, as OpenDeck does
+            if image is None:
+                self.set_background_color([0, 0, 0, 255])
+            else:
+                r, g, b = image.convert("RGB").resize((1, 1), Image.BOX).getpixel((0, 0))
+                self.set_background_color([r, g, b, 255])
+        elif image is None:
+            self.set_media(media_path=greyscale_image)
+        else:
+            self.set_media(image=image)
+
     def on_ready(self) -> None:
-        self.set_media(media_path=greyscale_image)
+        if self.input_type() not in ("keys", "dials", "touch_keys", "screens"):
+            return
+        self.show_image(None)
         context = self.context()
         send_to_opendeck(
             json.dumps(
